@@ -50,13 +50,6 @@ st.markdown(
         color: #dc2626;
         border: 1px solid rgba(239, 68, 68, 0.3);
     }
-    .multimodal-panel {
-        background: rgba(120, 120, 120, 0.05);
-        border: 1px solid rgba(120, 120, 120, 0.15);
-        border-radius: 10px;
-        padding: 1rem;
-        margin-bottom: 1rem;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -84,6 +77,12 @@ if "temperature" not in st.session_state:
 
 if "voice_transcription" not in st.session_state:
     st.session_state.voice_transcription = ""
+
+if "rag_enabled" not in st.session_state:
+    st.session_state.rag_enabled = False
+
+if "selected_document" not in st.session_state:
+    st.session_state.selected_document = "All Documents"
 
 
 # -----------------------------------------------------------------------------
@@ -123,7 +122,7 @@ def handle_tts_request(text: str, msg_idx: int):
 
 
 # -----------------------------------------------------------------------------
-# Sidebar: Status, Controls, and Conversation History
+# Sidebar: Status, Controls, RAG Documents, and History
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### 🤖 Multimodal AI")
@@ -158,7 +157,51 @@ with st.sidebar:
 
     st.divider()
 
-    # 3. Model Configuration Expander
+    # 3. PDF Document Management (RAG)
+    st.markdown("#### 📄 Document Library (RAG)")
+    uploaded_pdf = st.file_uploader(
+        "Upload PDF for Q&A",
+        type=["pdf"],
+        key="sidebar_pdf_uploader",
+    )
+    if uploaded_pdf is not None:
+        if st.button("📥 Index PDF Document", use_container_width=True):
+            with st.spinner(f"Extracting & indexing '{uploaded_pdf.name}'..."):
+                upload_res = api_client.upload_pdf(
+                    pdf_bytes=uploaded_pdf.getvalue(),
+                    filename=uploaded_pdf.name,
+                )
+            if upload_res["success"]:
+                up_data = upload_res["data"]
+                st.success(f"✅ Indexed {up_data['page_count']} pages ({up_data['chunk_count']} chunks)!")
+                st.session_state.rag_enabled = True
+                st.session_state.selected_document = uploaded_pdf.name
+                st.rerun()
+            else:
+                st.error(upload_res["error"])
+
+    # Document selector for RAG
+    available_docs = api_client.list_documents()
+    if available_docs:
+        doc_options = ["All Documents"] + available_docs
+        st.session_state.selected_document = st.selectbox(
+            "Target Document for Q&A:",
+            options=doc_options,
+            index=0 if st.session_state.selected_document not in doc_options else doc_options.index(st.session_state.selected_document),
+            help="Select which document to ground answers in, or search all uploaded PDFs.",
+        )
+        st.session_state.rag_enabled = st.checkbox(
+            "Enable Document Q&A (RAG)",
+            value=st.session_state.rag_enabled,
+            help="When checked, user questions will search uploaded PDFs and cite sources.",
+        )
+    else:
+        st.caption("Upload a PDF above to enable Document Q&A.")
+        st.session_state.rag_enabled = False
+
+    st.divider()
+
+    # 4. Model Configuration Expander
     with st.expander("⚙️ Chat Settings", expanded=False):
         st.session_state.temperature = st.slider(
             "Creativity (Temperature)",
@@ -177,7 +220,7 @@ with st.sidebar:
 
     st.markdown("#### 💬 Saved Conversations")
 
-    # 4. Conversation History from Database
+    # 5. Conversation History from Database
     conversations = api_client.list_conversations()
     if not conversations:
         st.caption("No previous conversations saved yet.")
@@ -215,15 +258,19 @@ with st.sidebar:
 # -----------------------------------------------------------------------------
 
 # Header
-col_header, col_badge = st.columns([0.75, 0.25])
+col_header, col_badge = st.columns([0.70, 0.30])
 with col_header:
     st.subheader(f"💬 {st.session_state.current_title}")
 with col_badge:
     model_name = "gemini-1.5-flash"
     if health["connected"] and health["data"]:
         model_name = health["data"].get("model", model_name)
+    mode_tag = "📚 RAG Active" if st.session_state.rag_enabled else "💬 Direct Chat"
     st.markdown(
-        f"<div style='text-align: right; padding-top: 0.5rem;'><span style='background: rgba(120,120,120,0.1); padding: 0.3rem 0.7rem; border-radius: 8px; font-size: 0.85rem;'>⚡ {model_name}</span></div>",
+        f"<div style='text-align: right; padding-top: 0.5rem;'>"
+        f"<span style='background: rgba(0,120,255,0.1); color:#0070f3; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.8rem; margin-right: 0.4rem;'>{mode_tag}</span>"
+        f"<span style='background: rgba(120,120,120,0.1); padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.8rem;'>⚡ {model_name}</span>"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -253,14 +300,12 @@ with col_vision:
                     img_bytes = uploaded_image_file.getvalue()
                     mime_type = uploaded_image_file.type or "image/jpeg"
 
-                    # 1. Add user message with image preview to session state
                     st.session_state.messages.append({
                         "role": "user",
                         "content": f"📷 [Image: {uploaded_image_file.name}]\n\n{vision_prompt}",
                         "image_data": img_bytes,
                     })
 
-                    # 2. Call vision backend endpoint
                     with st.spinner("Gemini Vision is analyzing the image..."):
                         res = api_client.send_vision_message(
                             prompt=vision_prompt,
@@ -303,7 +348,7 @@ with col_voice:
                 else:
                     st.error(f"Transcription failed: {transcription['error']}")
 
-        # Editable text area to allow user to review and refine before sending
+        # Editable review area before sending
         if st.session_state.voice_transcription:
             reviewed_text = st.text_area(
                 "Review & Edit Recognized Text:",
@@ -315,25 +360,48 @@ with col_voice:
             with col_vsend:
                 if st.button("📤 Send Voice Prompt", key="btn_send_voice", type="primary"):
                     if reviewed_text.strip():
-                        # Append and send message
                         st.session_state.messages.append({"role": "user", "content": reviewed_text})
-                        with st.spinner("Gemini is thinking..."):
-                            resp = api_client.send_chat_message(
-                                message=reviewed_text,
-                                session_id=st.session_state.current_session_id,
-                                system_instruction=st.session_state.system_instruction,
-                                temperature=st.session_state.temperature,
-                            )
-                        if resp["success"]:
-                            st.session_state.current_session_id = resp["data"]["session_id"]
-                            st.session_state.messages.append({
-                                "role": "assistant",
-                                "content": resp["data"]["reply"],
-                            })
-                            st.session_state.voice_transcription = ""
-                            st.rerun()
+
+                        # Check if RAG mode is active
+                        if st.session_state.rag_enabled:
+                            filter_doc = None if st.session_state.selected_document == "All Documents" else st.session_state.selected_document
+                            with st.spinner("Searching document context and generating answer..."):
+                                resp = api_client.query_rag(
+                                    question=reviewed_text,
+                                    doc_name=filter_doc,
+                                    session_id=st.session_state.current_session_id,
+                                    temperature=0.3,
+                                )
+                            if resp["success"]:
+                                r_data = resp["data"]
+                                st.session_state.current_session_id = r_data["session_id"]
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": r_data["answer"],
+                                    "sources": r_data.get("sources", []),
+                                })
+                                st.session_state.voice_transcription = ""
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {resp['error']}")
                         else:
-                            st.error(f"❌ {resp['error']}")
+                            with st.spinner("Gemini is thinking..."):
+                                resp = api_client.send_chat_message(
+                                    message=reviewed_text,
+                                    session_id=st.session_state.current_session_id,
+                                    system_instruction=st.session_state.system_instruction,
+                                    temperature=st.session_state.temperature,
+                                )
+                            if resp["success"]:
+                                st.session_state.current_session_id = resp["data"]["session_id"]
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": resp["data"]["reply"],
+                                })
+                                st.session_state.voice_transcription = ""
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {resp['error']}")
             with col_vclear:
                 if st.button("Clear", key="btn_clear_voice"):
                     st.session_state.voice_transcription = ""
@@ -368,21 +436,32 @@ if user_prompt:
         with st.chat_message("user", avatar="👤"):
             st.markdown(user_prompt)
 
-        # 2. Display assistant container with thinking spinner
+        # 2. Generate response (RAG or standard chat)
         with st.chat_message("assistant", avatar="🤖"):
-            with st.spinner("Gemini is thinking..."):
-                response = api_client.send_chat_message(
-                    message=user_prompt,
-                    session_id=st.session_state.current_session_id,
-                    system_instruction=st.session_state.system_instruction,
-                    temperature=st.session_state.temperature,
-                )
+            if st.session_state.rag_enabled:
+                filter_doc = None if st.session_state.selected_document == "All Documents" else st.session_state.selected_document
+                with st.spinner(f"Searching '{st.session_state.selected_document}' & answering..."):
+                    response = api_client.query_rag(
+                        question=user_prompt,
+                        doc_name=filter_doc,
+                        session_id=st.session_state.current_session_id,
+                        temperature=0.3,
+                    )
+            else:
+                with st.spinner("Gemini is thinking..."):
+                    response = api_client.send_chat_message(
+                        message=user_prompt,
+                        session_id=st.session_state.current_session_id,
+                        system_instruction=st.session_state.system_instruction,
+                        temperature=st.session_state.temperature,
+                    )
 
         # 3. Handle response
         if response["success"]:
             resp_data = response["data"]
-            reply_text = resp_data["reply"]
+            reply_text = resp_data.get("answer") or resp_data.get("reply", "")
             new_session_id = resp_data.get("session_id")
+            sources = resp_data.get("sources", [])
 
             if new_session_id and not st.session_state.current_session_id:
                 st.session_state.current_session_id = new_session_id
@@ -391,7 +470,11 @@ if user_prompt:
                     title_snip + "..." if len(user_prompt.strip().split("\n")[0]) > 35 else title_snip
                 )
 
-            st.session_state.messages.append({"role": "assistant", "content": reply_text})
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": reply_text,
+                "sources": sources,
+            })
             st.rerun()
 
         else:

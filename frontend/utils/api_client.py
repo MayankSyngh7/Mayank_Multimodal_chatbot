@@ -145,10 +145,7 @@ class APIClient:
         system_instruction: Optional[str] = None,
         temperature: float = 0.7,
     ) -> Dict[str, Any]:
-        """
-        Uploads an image with a prompt to the Gemini Vision endpoint.
-        Returns AI reply dict or error dict.
-        """
+        """Uploads an image with a prompt to the Gemini Vision endpoint."""
         data = {
             "prompt": prompt,
             "temperature": temperature,
@@ -205,10 +202,7 @@ class APIClient:
         filename: str = "recording.wav",
         mime_type: str = "audio/wav",
     ) -> Dict[str, Any]:
-        """
-        Uploads audio to the backend transcription endpoint.
-        Returns recognized speech text dict or error dict.
-        """
+        """Uploads audio to the backend transcription endpoint."""
         files = {
             "file": (filename, audio_bytes, mime_type),
         }
@@ -244,10 +238,7 @@ class APIClient:
             return {"success": False, "text": "", "error": str(e)}
 
     def text_to_speech(self, text: str, lang: str = "en") -> Optional[bytes]:
-        """
-        Converts text to MP3 speech audio bytes via backend.
-        Returns raw audio bytes or None if error.
-        """
+        """Converts text to MP3 speech audio bytes via backend."""
         try:
             resp = requests.post(
                 f"{self.base_url}/api/audio/tts",
@@ -259,6 +250,105 @@ class APIClient:
             return None
         except Exception:
             return None
+
+    def upload_pdf(self, pdf_bytes: bytes, filename: str) -> Dict[str, Any]:
+        """Uploads, extracts text from, and indexes a PDF document."""
+        files = {
+            "file": (filename, pdf_bytes, "application/pdf"),
+        }
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/rag/upload",
+                files=files,
+                timeout=self.timeout,
+            )
+
+            if resp.status_code == 201:
+                return {"success": True, "data": resp.json(), "error": None}
+
+            try:
+                error_detail = resp.json().get("detail", resp.text)
+            except Exception:
+                error_detail = resp.text
+
+            return {
+                "success": False,
+                "data": None,
+                "error": f"Upload Error ({resp.status_code}): {error_detail}",
+            }
+
+        except requests.exceptions.ConnectionError:
+            return {
+                "success": False,
+                "data": None,
+                "error": "Connection Error: Cannot reach FastAPI backend to upload PDF.",
+            }
+        except Exception as e:
+            return {"success": False, "data": None, "error": str(e)}
+
+    def query_rag(
+        self,
+        question: str,
+        doc_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+        top_k: int = 4,
+        temperature: float = 0.3,
+    ) -> Dict[str, Any]:
+        """Queries uploaded documents using RAG."""
+        payload = {
+            "question": question,
+            "doc_name": doc_name,
+            "session_id": session_id,
+            "top_k": top_k,
+            "temperature": temperature,
+        }
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/rag/query",
+                json=payload,
+                timeout=self.timeout,
+            )
+
+            if resp.status_code == 200:
+                return {"success": True, "data": resp.json(), "error": None}
+
+            try:
+                error_detail = resp.json().get("detail", resp.text)
+            except Exception:
+                error_detail = resp.text
+
+            return {
+                "success": False,
+                "data": None,
+                "error": f"RAG Query Error ({resp.status_code}): {error_detail}",
+            }
+
+        except requests.exceptions.ConnectionError:
+            return {
+                "success": False,
+                "data": None,
+                "error": "Connection Error: Cannot reach FastAPI backend.",
+            }
+        except requests.exceptions.Timeout:
+            return {
+                "success": False,
+                "data": None,
+                "error": "Timeout Error: RAG query took too long to complete. Please try again.",
+            }
+        except Exception as e:
+            return {"success": False, "data": None, "error": str(e)}
+
+    def list_documents(self) -> List[str]:
+        """Fetches list of all indexed PDF documents."""
+        try:
+            resp = requests.get(f"{self.base_url}/api/rag/documents", timeout=10)
+            if resp.status_code == 200:
+                return resp.json().get("documents", [])
+            return []
+        except Exception:
+            return []
 
 
 # Global API client instance

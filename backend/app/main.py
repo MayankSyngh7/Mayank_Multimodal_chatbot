@@ -9,6 +9,7 @@ from backend.app.schemas.chat import HealthCheckResponse
 from backend.app.api.chat import router as chat_router
 from backend.app.api.conversations import router as conversations_router
 from backend.app.api.audio import router as audio_router
+from backend.app.api.rag import router as rag_router
 from backend.app.db.database import init_db
 
 # Configure basic logging
@@ -23,7 +24,7 @@ logger = logging.getLogger("chatbot.backend")
 async def lifespan(app: FastAPI):
     """
     FastAPI lifespan context manager:
-    Initializes database tables on application startup.
+    Initializes database tables and storage folders on application startup.
     """
     logger.info("Initializing database tables...")
     init_db()
@@ -38,7 +39,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="FastAPI Backend for Multimodal AI Chatbot with Vision, Voice, and SQLite history.",
+    description="FastAPI Backend for Multimodal AI Chatbot with Vision, Voice, and PDF RAG.",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -61,6 +62,7 @@ app.mount("/uploads", StaticFiles(directory=str(settings.UPLOAD_DIR)), name="upl
 app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(audio_router)
+app.include_router(rag_router)
 
 
 @app.get(

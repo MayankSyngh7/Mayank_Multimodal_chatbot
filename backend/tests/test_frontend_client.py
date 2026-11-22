@@ -117,3 +117,55 @@ def test_api_client_text_to_speech():
     with patch("requests.post", return_value=mock_resp):
         audio_data = client.text_to_speech("Hello")
         assert audio_data == b"fake-mp3-bytes"
+
+
+def test_api_client_upload_pdf():
+    """Test uploading a PDF document via client."""
+    client = APIClient(base_url="http://testbackend:8000")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 201
+    mock_resp.json.return_value = {
+        "filename": "doc.pdf",
+        "page_count": 5,
+        "chunk_count": 12,
+        "status": "indexed",
+        "message": "Indexed",
+    }
+
+    with patch("requests.post", return_value=mock_resp):
+        res = client.upload_pdf(pdf_bytes=b"%PDF-1.4...", filename="doc.pdf")
+        assert res["success"] is True
+        assert res["data"]["filename"] == "doc.pdf"
+        assert res["data"]["chunk_count"] == 12
+
+
+def test_api_client_query_rag():
+    """Test querying RAG via client."""
+    client = APIClient(base_url="http://testbackend:8000")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "answer": "This is the answer from page 3.",
+        "session_id": "rag-session-1",
+        "sources": [{"doc_name": "doc.pdf", "page": 3, "snippet": "..."}],
+        "model": "gemini-1.5-flash",
+    }
+
+    with patch("requests.post", return_value=mock_resp):
+        res = client.query_rag(question="Where is Section 2?", doc_name="doc.pdf")
+        assert res["success"] is True
+        assert res["data"]["answer"] == "This is the answer from page 3."
+        assert len(res["data"]["sources"]) == 1
+
+
+def test_api_client_list_documents():
+    """Test listing documents via client."""
+    client = APIClient(base_url="http://testbackend:8000")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"documents": ["doc1.pdf", "doc2.pdf"], "count": 2}
+
+    with patch("requests.get", return_value=mock_resp):
+        docs = client.list_documents()
+        assert len(docs) == 2
+        assert "doc1.pdf" in docs
