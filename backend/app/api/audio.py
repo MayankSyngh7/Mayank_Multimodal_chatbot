@@ -33,9 +33,23 @@ async def transcribe_endpoint(
     file: UploadFile = File(..., description="Audio recording file (WAV, MP3, OGG, WebM, M4A)"),
 ) -> TranscriptionResponse:
     """Transcribes an uploaded audio file into text."""
-    # Validate audio MIME type first
-    content_type = file.content_type or "audio/wav"
-    if content_type.lower() not in ALLOWED_AUDIO_TYPES:
+    # Validate audio MIME type first, inferring from filename if generic octet-stream
+    content_type = (file.content_type or "").lower()
+    filename_ext = (file.filename or "").lower()
+
+    if content_type in ["application/octet-stream", "binary/octet-stream", ""]:
+        if filename_ext.endswith(".mp3"):
+            content_type = "audio/mp3"
+        elif filename_ext.endswith(".ogg"):
+            content_type = "audio/ogg"
+        elif filename_ext.endswith(".webm"):
+            content_type = "audio/webm"
+        elif filename_ext.endswith(".m4a"):
+            content_type = "audio/m4a"
+        else:
+            content_type = "audio/wav"
+
+    if content_type not in ALLOWED_AUDIO_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -44,13 +58,7 @@ async def transcribe_endpoint(
             ),
         )
 
-    if not gemini_service.is_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gemini API is not configured. Add your GEMINI_API_KEY to the .env file.",
-        )
-
-    # Read and validate audio size
+    # Read and validate audio size BEFORE checking API configuration
     audio_bytes = await file.read()
     if len(audio_bytes) == 0:
         raise HTTPException(
@@ -61,6 +69,12 @@ async def transcribe_endpoint(
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Audio file exceeds maximum size limit of {MAX_AUDIO_SIZE // (1024 * 1024)} MB.",
+        )
+
+    if not gemini_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini API is not configured. Add your GEMINI_API_KEY to the .env file.",
         )
 
     try:

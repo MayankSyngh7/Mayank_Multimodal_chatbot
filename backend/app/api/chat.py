@@ -183,12 +183,6 @@ async def vision_chat_endpoint(
             detail=safety_warning,
         )
 
-    if not gemini_service.is_configured():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Gemini API is not configured. Add your GEMINI_API_KEY to the .env file.",
-        )
-
     # Read and validate image size
     image_bytes = await file.read()
     if len(image_bytes) == 0:
@@ -200,6 +194,24 @@ async def vision_chat_endpoint(
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Image file exceeds maximum limit of {MAX_IMAGE_SIZE // (1024 * 1024)} MB.",
+        )
+
+    # Validate image can be parsed and decoded by Pillow
+    try:
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img.verify()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Corrupted or invalid image file. Could not decode image.",
+        )
+
+    if not gemini_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini API is not configured. Add your GEMINI_API_KEY to the .env file.",
         )
 
     # Save image securely into uploads directory
