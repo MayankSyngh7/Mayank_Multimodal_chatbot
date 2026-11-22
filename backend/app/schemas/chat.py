@@ -12,8 +12,9 @@ class ChatRequest(BaseModel):
     """Payload sent by the client to generate a chatbot response."""
     message: str = Field(
         ..., 
-        min_length=1, 
-        description="The prompt or question asked by the user",
+        min_length=1,
+        max_length=4000,
+        description="The prompt or question asked by the user (max 4000 characters)",
         json_schema_extra={"example": "Hello! What can you help me with?"}
     )
     session_id: Optional[str] = Field(

@@ -1,10 +1,13 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.app.core.config import settings
+from backend.app.core.security import rate_limiter
 from backend.app.schemas.chat import HealthCheckResponse
 from backend.app.api.chat import router as chat_router
 from backend.app.api.conversations import router as conversations_router
@@ -53,6 +56,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def rate_limiting_middleware(request: Request, call_next):
+    """
+    Enforces in-memory sliding-window rate limiting on all /api endpoints.
+    Returns HTTP 429 when client requests exceed quota.
+    """
+    if request.url.path.startswith("/api/"):
+        client_ip = request.client.host if request.client else "127.0.0.1"
+        allowed, remaining = rate_limiter.check_rate_limit(client_ip)
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Rate limit exceeded. Maximum 120 requests per minute allowed. Please wait a moment."
+                },
+                headers={"Retry-After": "60"},
+            )
+    return await call_next(request)
+
+
+@app.exception_handler(SQLAlchemyError)
+async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+    """
+    Masks internal database errors to prevent leaking schema details or stack traces.
+    """
+    logger.error(f"Database error on {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "A database error occurred. Your request could not be processed."},
+    )
 
 # Serve uploaded files statically for image rendering
 settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

@@ -78,6 +78,33 @@ Mayank_Multimodal_chatbot/
 | **Phase 4** | **Streamlit Frontend** | Clean chat interface, sidebar for session history, and backend API integration *(Completed)* |
 | **Phase 5** | **Multimodal: Vision & Voice** | Image analysis with Gemini Vision, voice recording input, and gTTS audio output *(Completed)* |
 | **Phase 6** | **RAG for PDF Question Answering** | PDF document parsing, vector indexing with ChromaDB, and context-retrieved answering *(Completed)* |
+| **Phase 7** | **Security Guardrails & Responsible AI** | Prompt injection defense, input validation, rate limiting, and untrusted context isolation *(Completed)* |
+| **Phase 8** | **Production Readiness & Final Polish** | Performance optimization, end-to-end documentation, and deployment guides |
+
+---
+
+## 🔒 Security Guardrails & Responsible AI
+
+### 1. Prompt Injection Protection
+- Direct heuristic scanning detects common override attempts (`ignore previous instructions`, `system override`, `DAN mode`, `reveal secret key`).
+- Untrusted document chunks in RAG are isolated inside `<document_excerpt>` tags and sanitized to neutralize fake role delimiters (`System:`, `Assistant:`).
+- Strict system prompts instruct the model never to execute commands found inside document excerpts.
+
+### 2. Input Validation & File Restrictions
+- Text prompts are capped at 4,000 characters.
+- Images: restricted to `.jpg`, `.jpeg`, `.png` up to 10 MB.
+- Audio: restricted to WAV, MP3, OGG, WebM, M4A up to 25 MB.
+- PDF Documents: restricted to `.pdf` up to 25 MB.
+
+### 3. Rate Limiting
+- In-memory sliding-window rate limiter restricts requests to 120 requests/minute per client IP to mitigate denial-of-service and quota exhaustion.
+
+### 4. Secure Error Masking
+- Database exceptions (`SQLAlchemyError`) and internal server errors are caught and masked into clean, safe error messages to prevent leaking internal database schemas, table names, or file paths.
+
+### 5. Known Limitations
+- Heuristic regex-based prompt injection detection provides defense-in-depth but cannot guarantee 100% protection against all novel, obfuscated, or multilingual adversarial attacks.
+- Rate limiting is currently in-memory per worker process; production multi-node clusters should connect to an external Redis store for distributed rate limiting.
 
 ---
 

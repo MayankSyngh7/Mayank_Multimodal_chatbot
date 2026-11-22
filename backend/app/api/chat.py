@@ -10,15 +10,19 @@ from backend.app.services.gemini_service import gemini_service
 from backend.app.services.conversation_service import conversation_service
 from backend.app.db.database import get_db
 from backend.app.core.config import settings
+from backend.app.core.security import (
+    detect_prompt_injection,
+    validate_content_safety,
+    MAX_IMAGE_SIZE,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
-# Allowed image MIME types and maximum file size (10 MB)
+# Allowed image MIME types
 ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png"]
 ALLOWED_IMAGE_EXTS = [".jpg", ".jpeg", ".png"]
-MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 @router.post(
@@ -41,6 +45,22 @@ async def chat_endpoint(
     5. Saves AI response in conversation history.
     6. Returns ChatResponse with session_id.
     """
+    # Guardrail: Check for prompt injection or system override attempts
+    injection_warning = detect_prompt_injection(request.message)
+    if injection_warning:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=injection_warning,
+        )
+
+    # Guardrail: Content safety policy check
+    safety_warning = validate_content_safety(request.message)
+    if safety_warning:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=safety_warning,
+        )
+
     if not gemini_service.is_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -145,6 +165,22 @@ async def vision_chat_endpoint(
                 f"Unsupported image format '{content_type}'. "
                 f"Allowed formats are JPG, JPEG, and PNG."
             ),
+        )
+
+    # Guardrail: Check for prompt injection or system override attempts
+    injection_warning = detect_prompt_injection(prompt)
+    if injection_warning:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=injection_warning,
+        )
+
+    # Guardrail: Content safety policy check
+    safety_warning = validate_content_safety(prompt)
+    if safety_warning:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=safety_warning,
         )
 
     if not gemini_service.is_configured():

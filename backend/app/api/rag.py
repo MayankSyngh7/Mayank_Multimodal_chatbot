@@ -15,12 +15,11 @@ from backend.app.services.conversation_service import conversation_service
 from backend.app.services.gemini_service import gemini_service
 from backend.app.db.database import get_db
 from backend.app.core.config import settings
+from backend.app.core.security import detect_prompt_injection, validate_content_safety, MAX_PDF_SIZE
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/rag", tags=["RAG Document QA"])
-
-MAX_PDF_SIZE = 25 * 1024 * 1024  # 25 MB
 
 
 @router.post(
@@ -107,6 +106,21 @@ async def query_document(
     db: Session = Depends(get_db),
 ) -> RAGQueryResponse:
     """Answers user questions strictly using retrieved document context."""
+    # Guardrails: Check prompt injection & content safety
+    injection_warning = detect_prompt_injection(request.question)
+    if injection_warning:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=injection_warning,
+        )
+
+    safety_warning = validate_content_safety(request.question)
+    if safety_warning:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=safety_warning,
+        )
+
     if not gemini_service.is_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
