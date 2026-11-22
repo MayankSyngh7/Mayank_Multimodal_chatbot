@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import uuid
+import logging
+from pathlib import Path
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.orm import Session
 
 from backend.app.schemas.chat import ChatRequest, ChatResponse
@@ -7,7 +11,14 @@ from backend.app.services.conversation_service import conversation_service
 from backend.app.db.database import get_db
 from backend.app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
+
+# Allowed image MIME types and maximum file size (10 MB)
+ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png"]
+ALLOWED_IMAGE_EXTS = [".jpg", ".jpeg", ".png"]
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 @router.post(
@@ -97,6 +108,125 @@ async def chat_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected server error occurred: {str(e)}",
+        )
+
+
+@router.post(
+    "/vision",
+    response_model=ChatResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Multimodal Image Understanding Chat",
+    description="Upload an image (JPG, PNG) with a prompt and get Gemini Vision answers.",
+)
+async def vision_chat_endpoint(
+    prompt: str = Form(..., min_length=1, description="Question or prompt about the image"),
+    file: UploadFile = File(..., description="Image file (JPG, JPEG, PNG)"),
+    session_id: Optional[str] = Form(None, description="Optional conversation session ID"),
+    system_instruction: Optional[str] = Form(None),
+    temperature: float = Form(0.7),
+    db: Session = Depends(get_db),
+) -> ChatResponse:
+    """
+    Multimodal vision endpoint:
+    1. Validates image MIME type and file size.
+    2. Securely saves the uploaded file to data/uploads/.
+    3. Persists conversation and messages to SQLite database.
+    4. Calls Gemini Vision API.
+    5. Returns response.
+    """
+    # Validate image MIME type and extension first
+    content_type = (file.content_type or "").lower()
+    file_ext = Path(file.filename or "").suffix.lower()
+
+    if content_type not in ALLOWED_IMAGE_TYPES or file_ext not in ALLOWED_IMAGE_EXTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unsupported image format '{content_type}'. "
+                f"Allowed formats are JPG, JPEG, and PNG."
+            ),
+        )
+
+    if not gemini_service.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini API is not configured. Add your GEMINI_API_KEY to the .env file.",
+        )
+
+    # Read and validate image size
+    image_bytes = await file.read()
+    if len(image_bytes) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded image file is empty.",
+        )
+    if len(image_bytes) > MAX_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Image file exceeds maximum limit of {MAX_IMAGE_SIZE // (1024 * 1024)} MB.",
+        )
+
+    # Save image securely into uploads directory
+    settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_filename = f"{uuid.uuid4().hex[:12]}_{Path(file.filename).name}"
+    saved_path = settings.UPLOAD_DIR / safe_filename
+    with open(saved_path, "wb") as f:
+        f.write(image_bytes)
+
+    try:
+        # Manage conversation session
+        if session_id:
+            conv = conversation_service.get_conversation(db, session_id)
+            if not conv:
+                conv = conversation_service.create_conversation(
+                    db, title="Image Chat", conversation_id=session_id
+                )
+        else:
+            conv = conversation_service.create_conversation(db, title="Image Chat")
+
+        active_session_id = conv.id
+
+        # Persist user prompt with image reference in conversation history
+        user_message_content = f"📷 [Image: {file.filename}]\n\n{prompt}"
+        conversation_service.add_message(
+            db=db,
+            conversation_id=active_session_id,
+            role="user",
+            content=user_message_content,
+        )
+
+        # Query Gemini Vision model
+        reply_text = gemini_service.generate_vision_response(
+            prompt=prompt,
+            image_bytes=image_bytes,
+            mime_type=content_type,
+            system_instruction=system_instruction,
+            temperature=temperature,
+        )
+
+        # Persist AI response
+        conversation_service.add_message(
+            db=db,
+            conversation_id=active_session_id,
+            role="assistant",
+            content=reply_text,
+        )
+
+        return ChatResponse(
+            reply=reply_text,
+            session_id=active_session_id,
+            model=settings.GEMINI_MODEL,
+        )
+
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    except RuntimeError as re:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(re))
+    except Exception as e:
+        logger.error(f"Vision endpoint error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Vision processing failed: {str(e)}",
         )
 
 

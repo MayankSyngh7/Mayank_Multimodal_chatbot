@@ -1,5 +1,5 @@
 import streamlit as st
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable, Optional
 
 
 def render_empty_state():
@@ -13,13 +13,16 @@ def render_empty_state():
             </p>
             <div style="display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap;">
                 <span style="background: rgba(0, 120, 255, 0.1); color: #0070f3; padding: 0.4rem 0.9rem; border-radius: 20px; font-size: 0.9rem;">
-                    💡 Ask technical questions
+                    💬 Text Chat
                 </span>
-                <span style="background: rgba(40, 167, 69, 0.1); color: #28a745; padding: 0.4rem 0.9rem; border-radius: 20px; font-size: 0.9rem;">
-                    📝 Draft summaries & notes
+                <span style="background: rgba(147, 51, 234, 0.1); color: #9333ea; padding: 0.4rem 0.9rem; border-radius: 20px; font-size: 0.9rem;">
+                    🖼️ Image Understanding
                 </span>
-                <span style="background: rgba(255, 140, 0, 0.1); color: #ff8c00; padding: 0.4rem 0.9rem; border-radius: 20px; font-size: 0.9rem;">
-                    🐍 Debug Python & code
+                <span style="background: rgba(234, 88, 12, 0.1); color: #ea580c; padding: 0.4rem 0.9rem; border-radius: 20px; font-size: 0.9rem;">
+                    🎙️ Voice Input
+                </span>
+                <span style="background: rgba(16, 185, 129, 0.1); color: #10b981; padding: 0.4rem 0.9rem; border-radius: 20px; font-size: 0.9rem;">
+                    🔊 Text-to-Speech
                 </span>
             </div>
         </div>
@@ -28,22 +31,41 @@ def render_empty_state():
     )
 
 
-def render_chat_messages(messages: List[Dict[str, Any]]):
+def render_chat_messages(
+    messages: List[Dict[str, Any]],
+    on_play_tts: Optional[Callable[[str, int], None]] = None,
+):
     """
     Renders all chat messages from session state in chronological order.
-    Handles 'user' and 'assistant' / 'model' roles.
+    Supports user messages, AI replies, image previews, and TTS audio playback.
     """
     if not messages:
         render_empty_state()
         return
 
-    for msg in messages:
+    for idx, msg in enumerate(messages):
         role = msg.get("role", "user")
         content = msg.get("content", "")
 
-        # Map assistant role
         ui_role = "user" if role == "user" else "assistant"
         avatar = "👤" if ui_role == "user" else "🤖"
 
         with st.chat_message(ui_role, avatar=avatar):
+            # Check if this message has an attached image preview in session
+            if "image_data" in msg and msg["image_data"]:
+                st.image(msg["image_data"], caption="Uploaded Image", use_container_width=False, width=320)
+
             st.markdown(content)
+
+            # For assistant responses, provide TTS audio playback
+            if ui_role == "assistant" and content.strip():
+                # Check if audio was already generated for this message
+                audio_key = f"audio_{idx}"
+                if audio_key in st.session_state and st.session_state[audio_key]:
+                    st.audio(st.session_state[audio_key], format="audio/mp3")
+                else:
+                    col_listen, _ = st.columns([0.22, 0.78])
+                    with col_listen:
+                        if st.button("🔊 Listen", key=f"tts_btn_{idx}", help="Convert AI response to voice audio"):
+                            if on_play_tts:
+                                on_play_tts(content, idx)

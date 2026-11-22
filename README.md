@@ -76,7 +76,7 @@ Mayank_Multimodal_chatbot/
 | **Phase 2** | **FastAPI Backend & Gemini Integration** | FastAPI setup, configuration loading, basic Gemini text chat endpoint *(Completed)* |
 | **Phase 3** | **Database & Chat History Persistence** | SQLite + SQLAlchemy ORM models, session management, and conversation storage *(Completed)* |
 | **Phase 4** | **Streamlit Frontend** | Clean chat interface, sidebar for session history, and backend API integration *(Completed)* |
-| **Phase 5** | **Multimodal: Vision & Voice** | Image analysis with Gemini Vision, voice recording input, and gTTS audio output |
+| **Phase 5** | **Multimodal: Vision & Voice** | Image analysis with Gemini Vision, voice recording input, and gTTS audio output *(Completed)* |
 | **Phase 6** | **RAG for PDF Question Answering** | PDF document parsing, vector indexing with ChromaDB, and context-retrieved answering |
 
 ---

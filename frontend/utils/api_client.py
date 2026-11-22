@@ -12,15 +12,12 @@ class APIClient:
     Encapsulates all REST API calls and handles network errors gracefully.
     """
 
-    def __init__(self, base_url: str = BACKEND_API_URL, timeout: int = 45):
+    def __init__(self, base_url: str = BACKEND_API_URL, timeout: int = 60):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
     def check_health(self) -> Dict[str, Any]:
-        """
-        Check backend connectivity and configuration status.
-        Returns health status dict or error info.
-        """
+        """Check backend connectivity and configuration status."""
         try:
             resp = requests.get(f"{self.base_url}/health", timeout=5)
             if resp.status_code == 200:
@@ -94,10 +91,7 @@ class APIClient:
         system_instruction: Optional[str] = None,
         temperature: float = 0.7,
     ) -> Dict[str, Any]:
-        """
-        Send a chat message to Gemini via the backend.
-        Returns response dict with 'reply' and 'session_id', or an error dict.
-        """
+        """Send a text chat message to Gemini via the backend."""
         payload = {
             "message": message,
             "session_id": session_id,
@@ -115,7 +109,6 @@ class APIClient:
             if resp.status_code == 200:
                 return {"success": True, "data": resp.json(), "error": None}
 
-            # Handle structured error response
             try:
                 error_detail = resp.json().get("detail", resp.text)
             except Exception:
@@ -131,7 +124,7 @@ class APIClient:
             return {
                 "success": False,
                 "data": None,
-                "error": "Connection Error: Cannot reach FastAPI backend. Please ensure the backend server is running.",
+                "error": "Connection Error: Cannot reach FastAPI backend. Please ensure the backend is running.",
             }
         except requests.exceptions.Timeout:
             return {
@@ -141,6 +134,131 @@ class APIClient:
             }
         except Exception as e:
             return {"success": False, "data": None, "error": f"Unexpected error: {str(e)}"}
+
+    def send_vision_message(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        filename: str = "image.jpg",
+        mime_type: str = "image/jpeg",
+        session_id: Optional[str] = None,
+        system_instruction: Optional[str] = None,
+        temperature: float = 0.7,
+    ) -> Dict[str, Any]:
+        """
+        Uploads an image with a prompt to the Gemini Vision endpoint.
+        Returns AI reply dict or error dict.
+        """
+        data = {
+            "prompt": prompt,
+            "temperature": temperature,
+        }
+        if session_id:
+            data["session_id"] = session_id
+        if system_instruction:
+            data["system_instruction"] = system_instruction
+
+        files = {
+            "file": (filename, image_bytes, mime_type),
+        }
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/chat/vision",
+                data=data,
+                files=files,
+                timeout=self.timeout,
+            )
+
+            if resp.status_code == 200:
+                return {"success": True, "data": resp.json(), "error": None}
+
+            try:
+                error_detail = resp.json().get("detail", resp.text)
+            except Exception:
+                error_detail = resp.text
+
+            return {
+                "success": False,
+                "data": None,
+                "error": f"Vision Error ({resp.status_code}): {error_detail}",
+            }
+
+        except requests.exceptions.ConnectionError:
+            return {
+                "success": False,
+                "data": None,
+                "error": "Connection Error: Cannot reach FastAPI backend. Ensure backend is running.",
+            }
+        except requests.exceptions.Timeout:
+            return {
+                "success": False,
+                "data": None,
+                "error": "Timeout Error: Gemini Vision took too long to respond. Please try again.",
+            }
+        except Exception as e:
+            return {"success": False, "data": None, "error": f"Unexpected error: {str(e)}"}
+
+    def transcribe_audio(
+        self,
+        audio_bytes: bytes,
+        filename: str = "recording.wav",
+        mime_type: str = "audio/wav",
+    ) -> Dict[str, Any]:
+        """
+        Uploads audio to the backend transcription endpoint.
+        Returns recognized speech text dict or error dict.
+        """
+        files = {
+            "file": (filename, audio_bytes, mime_type),
+        }
+
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/audio/transcribe",
+                files=files,
+                timeout=self.timeout,
+            )
+
+            if resp.status_code == 200:
+                return {"success": True, "text": resp.json().get("text", ""), "error": None}
+
+            try:
+                error_detail = resp.json().get("detail", resp.text)
+            except Exception:
+                error_detail = resp.text
+
+            return {
+                "success": False,
+                "text": "",
+                "error": f"Transcription Error ({resp.status_code}): {error_detail}",
+            }
+
+        except requests.exceptions.ConnectionError:
+            return {
+                "success": False,
+                "text": "",
+                "error": "Connection Error: Cannot reach backend for voice transcription.",
+            }
+        except Exception as e:
+            return {"success": False, "text": "", "error": str(e)}
+
+    def text_to_speech(self, text: str, lang: str = "en") -> Optional[bytes]:
+        """
+        Converts text to MP3 speech audio bytes via backend.
+        Returns raw audio bytes or None if error.
+        """
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/audio/tts",
+                json={"text": text, "lang": lang},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                return resp.content
+            return None
+        except Exception:
+            return None
 
 
 # Global API client instance

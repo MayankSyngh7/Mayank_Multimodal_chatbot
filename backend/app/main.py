@@ -2,11 +2,13 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.app.core.config import settings
 from backend.app.schemas.chat import HealthCheckResponse
 from backend.app.api.chat import router as chat_router
 from backend.app.api.conversations import router as conversations_router
+from backend.app.api.audio import router as audio_router
 from backend.app.db.database import init_db
 
 # Configure basic logging
@@ -25,7 +27,9 @@ async def lifespan(app: FastAPI):
     """
     logger.info("Initializing database tables...")
     init_db()
-    logger.info("Database initialized successfully.")
+    settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    settings.VECTOR_DB_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info("Database and storage directories initialized successfully.")
     yield
     logger.info("Application shutting down.")
 
@@ -34,7 +38,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="FastAPI Backend for Multimodal AI Chatbot with Google Gemini & SQLite history.",
+    description="FastAPI Backend for Multimodal AI Chatbot with Vision, Voice, and SQLite history.",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -49,9 +53,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve uploaded files statically for image rendering
+settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(settings.UPLOAD_DIR)), name="uploads")
+
 # Register API Routers
 app.include_router(chat_router)
 app.include_router(conversations_router)
+app.include_router(audio_router)
 
 
 @app.get(

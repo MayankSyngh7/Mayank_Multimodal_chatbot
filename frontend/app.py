@@ -1,5 +1,6 @@
 import streamlit as st
 from datetime import datetime
+from PIL import Image
 
 from frontend.utils.api_client import api_client
 from frontend.components.chat_view import render_chat_messages
@@ -20,14 +21,11 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Clean, modern typography and layout */
     .main .block-container {
         padding-top: 1.5rem;
         padding-bottom: 2rem;
         max-width: 950px;
     }
-    
-    /* Status indicators */
     .status-badge {
         display: inline-flex;
         align-items: center;
@@ -52,11 +50,12 @@ st.markdown(
         color: #dc2626;
         border: 1px solid rgba(239, 68, 68, 0.3);
     }
-
-    /* Sidebar conversation item styling */
-    .conv-item {
-        padding: 0.3rem 0;
-        border-bottom: 1px solid rgba(120, 120, 120, 0.1);
+    .multimodal-panel {
+        background: rgba(120, 120, 120, 0.05);
+        border: 1px solid rgba(120, 120, 120, 0.15);
+        border-radius: 10px;
+        padding: 1rem;
+        margin-bottom: 1rem;
     }
     </style>
     """,
@@ -83,6 +82,9 @@ if "system_instruction" not in st.session_state:
 if "temperature" not in st.session_state:
     st.session_state.temperature = 0.7
 
+if "voice_transcription" not in st.session_state:
+    st.session_state.voice_transcription = ""
+
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -92,6 +94,7 @@ def reset_to_new_chat():
     st.session_state.current_session_id = None
     st.session_state.current_title = "New Conversation"
     st.session_state.messages = []
+    st.session_state.voice_transcription = ""
 
 
 def load_selected_conversation(conv_id: str):
@@ -106,6 +109,17 @@ def load_selected_conversation(conv_id: str):
         ]
     else:
         st.error(f"Could not load conversation {conv_id}.")
+
+
+def handle_tts_request(text: str, msg_idx: int):
+    """Generates MP3 audio for an AI response and stores it in session state."""
+    with st.spinner("Generating voice audio..."):
+        audio_bytes = api_client.text_to_speech(text)
+        if audio_bytes:
+            st.session_state[f"audio_{msg_idx}"] = audio_bytes
+            st.rerun()
+        else:
+            st.warning("⚠️ Audio playback could not be generated. Please check backend connection.")
 
 
 # -----------------------------------------------------------------------------
@@ -152,7 +166,7 @@ with st.sidebar:
             max_value=1.5,
             value=st.session_state.temperature,
             step=0.1,
-            help="Lower values make answers more focused and deterministic; higher values make them more creative.",
+            help="Lower values make answers more focused; higher values make them more creative.",
         )
         st.session_state.system_instruction = st.text_area(
             "System Persona",
@@ -213,10 +227,131 @@ with col_badge:
         unsafe_allow_html=True,
     )
 
-# Render Chat History
-render_chat_messages(st.session_state.messages)
+# -----------------------------------------------------------------------------
+# Multimodal Features: Image Upload & Voice Input Expanders
+# -----------------------------------------------------------------------------
+col_vision, col_voice = st.columns(2)
 
-# Chat Input & Interaction
+with col_vision:
+    with st.expander("🖼️ Ask About an Image", expanded=False):
+        uploaded_image_file = st.file_uploader(
+            "Upload image (JPG, JPEG, PNG)",
+            type=["jpg", "jpeg", "png"],
+            key="vision_image_uploader",
+        )
+        if uploaded_image_file:
+            st.image(uploaded_image_file, caption="Preview", width=220)
+            vision_prompt = st.text_input(
+                "Question about image:",
+                value="Describe this image in detail and highlight key elements.",
+                key="vision_prompt_input",
+            )
+            if st.button("🔍 Analyze Image", key="btn_analyze_image", type="primary"):
+                if not health["connected"]:
+                    st.error("FastAPI backend is offline.")
+                else:
+                    img_bytes = uploaded_image_file.getvalue()
+                    mime_type = uploaded_image_file.type or "image/jpeg"
+
+                    # 1. Add user message with image preview to session state
+                    st.session_state.messages.append({
+                        "role": "user",
+                        "content": f"📷 [Image: {uploaded_image_file.name}]\n\n{vision_prompt}",
+                        "image_data": img_bytes,
+                    })
+
+                    # 2. Call vision backend endpoint
+                    with st.spinner("Gemini Vision is analyzing the image..."):
+                        res = api_client.send_vision_message(
+                            prompt=vision_prompt,
+                            image_bytes=img_bytes,
+                            filename=uploaded_image_file.name,
+                            mime_type=mime_type,
+                            session_id=st.session_state.current_session_id,
+                            system_instruction=st.session_state.system_instruction,
+                            temperature=st.session_state.temperature,
+                        )
+
+                    if res["success"]:
+                        resp_data = res["data"]
+                        st.session_state.current_session_id = resp_data["session_id"]
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": resp_data["reply"],
+                        })
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {res['error']}")
+
+with col_voice:
+    with st.expander("🎙️ Voice Input (Microphone)", expanded=False):
+        st.caption("Speak into your microphone. Your speech will be converted to text.")
+        audio_clip = st.audio_input("Record voice prompt", key="mic_audio_input")
+
+        if audio_clip is not None:
+            audio_bytes = audio_clip.getvalue()
+            if st.button("⚡ Transcribe Speech", key="btn_transcribe_audio"):
+                with st.spinner("Transcribing speech with Gemini..."):
+                    transcription = api_client.transcribe_audio(
+                        audio_bytes=audio_bytes,
+                        filename="input_recording.wav",
+                        mime_type="audio/wav",
+                    )
+                if transcription["success"]:
+                    st.session_state.voice_transcription = transcription["text"]
+                    st.success("Transcribed successfully! Review below:")
+                else:
+                    st.error(f"Transcription failed: {transcription['error']}")
+
+        # Editable text area to allow user to review and refine before sending
+        if st.session_state.voice_transcription:
+            reviewed_text = st.text_area(
+                "Review & Edit Recognized Text:",
+                value=st.session_state.voice_transcription,
+                key="reviewed_voice_text",
+                height=70,
+            )
+            col_vsend, col_vclear = st.columns([0.7, 0.3])
+            with col_vsend:
+                if st.button("📤 Send Voice Prompt", key="btn_send_voice", type="primary"):
+                    if reviewed_text.strip():
+                        # Append and send message
+                        st.session_state.messages.append({"role": "user", "content": reviewed_text})
+                        with st.spinner("Gemini is thinking..."):
+                            resp = api_client.send_chat_message(
+                                message=reviewed_text,
+                                session_id=st.session_state.current_session_id,
+                                system_instruction=st.session_state.system_instruction,
+                                temperature=st.session_state.temperature,
+                            )
+                        if resp["success"]:
+                            st.session_state.current_session_id = resp["data"]["session_id"]
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": resp["data"]["reply"],
+                            })
+                            st.session_state.voice_transcription = ""
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {resp['error']}")
+            with col_vclear:
+                if st.button("Clear", key="btn_clear_voice"):
+                    st.session_state.voice_transcription = ""
+                    st.rerun()
+
+st.divider()
+
+# -----------------------------------------------------------------------------
+# Render Chat History
+# -----------------------------------------------------------------------------
+render_chat_messages(
+    messages=st.session_state.messages,
+    on_play_tts=handle_tts_request,
+)
+
+# -----------------------------------------------------------------------------
+# Text Chat Input
+# -----------------------------------------------------------------------------
 user_prompt = st.chat_input("Type your message here...")
 
 if user_prompt:
@@ -249,16 +384,13 @@ if user_prompt:
             reply_text = resp_data["reply"]
             new_session_id = resp_data.get("session_id")
 
-            # Update session state with assigned session ID
             if new_session_id and not st.session_state.current_session_id:
                 st.session_state.current_session_id = new_session_id
-                # Derive title from user prompt
                 title_snip = user_prompt.strip().split("\n")[0][:35]
                 st.session_state.current_title = (
                     title_snip + "..." if len(user_prompt.strip().split("\n")[0]) > 35 else title_snip
                 )
 
-            # Append assistant message to chat history
             st.session_state.messages.append({"role": "assistant", "content": reply_text})
             st.rerun()
 
