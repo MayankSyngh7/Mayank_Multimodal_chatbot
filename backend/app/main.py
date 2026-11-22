@@ -1,10 +1,13 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.core.config import settings
 from backend.app.schemas.chat import HealthCheckResponse
 from backend.app.api.chat import router as chat_router
+from backend.app.api.conversations import router as conversations_router
+from backend.app.db.database import init_db
 
 # Configure basic logging
 logging.basicConfig(
@@ -13,20 +16,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger("chatbot.backend")
 
-# Initialize FastAPI application
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan context manager:
+    Initializes database tables on application startup.
+    """
+    logger.info("Initializing database tables...")
+    init_db()
+    logger.info("Database initialized successfully.")
+    yield
+    logger.info("Application shutting down.")
+
+
+# Initialize FastAPI application with lifespan
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="FastAPI Backend for Multimodal AI Chatbot with Google Gemini integration.",
+    description="FastAPI Backend for Multimodal AI Chatbot with Google Gemini & SQLite history.",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Configure Cross-Origin Resource Sharing (CORS)
-# Allows the Streamlit frontend (running on e.g. localhost:8501) to interact with this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to specific frontend origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,6 +51,7 @@ app.add_middleware(
 
 # Register API Routers
 app.include_router(chat_router)
+app.include_router(conversations_router)
 
 
 @app.get(

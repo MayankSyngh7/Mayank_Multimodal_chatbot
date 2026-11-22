@@ -1,14 +1,9 @@
 import pytest
-from unittest.mock import patch, MagicMock
-from fastapi.testclient import TestClient
-
-from backend.app.main import app
+from unittest.mock import patch
 from backend.app.core.config import settings
 
-client = TestClient(app)
 
-
-def test_root_endpoint():
+def test_root_endpoint(client):
     """Test the root endpoint returns 200 and expected info."""
     response = client.get("/")
     assert response.status_code == 200
@@ -18,7 +13,7 @@ def test_root_endpoint():
     assert data["health_check"] == "/health"
 
 
-def test_health_check_endpoint():
+def test_health_check_endpoint(client):
     """Test the health check returns status healthy."""
     response = client.get("/health")
     assert response.status_code == 200
@@ -28,7 +23,7 @@ def test_health_check_endpoint():
     assert "model" in data
 
 
-def test_gemini_status_endpoint():
+def test_gemini_status_endpoint(client):
     """Test the chat status endpoint."""
     response = client.get("/api/chat/status")
     assert response.status_code == 200
@@ -37,7 +32,7 @@ def test_gemini_status_endpoint():
     assert "model" in data
 
 
-def test_chat_endpoint_unconfigured_gemini():
+def test_chat_endpoint_unconfigured_gemini(client):
     """
     When Gemini API key is missing or not configured,
     the endpoint should return 503 with a helpful message.
@@ -52,13 +47,13 @@ def test_chat_endpoint_unconfigured_gemini():
         assert "Gemini API is not configured" in data["detail"]
 
 
-def test_chat_endpoint_validation_error():
+def test_chat_endpoint_validation_error(client):
     """Test validation errors on empty or missing message."""
     response = client.post("/api/chat", json={})
     assert response.status_code == 422  # Pydantic validation error
 
 
-def test_chat_endpoint_successful_mock():
+def test_chat_endpoint_successful_mock(client):
     """
     Test successful chat response when Gemini service generates text.
     """
